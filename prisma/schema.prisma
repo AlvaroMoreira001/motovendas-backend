@@ -1,0 +1,149 @@
+// Prisma Schema - MotoVendas Backend
+// Banco de dados: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUM: papel do usuário no sistema
+// ==========================================
+enum Role {
+  admin   // Pode tudo: cadastrar produtos, ver todas as vendas, fechar estoque
+  seller  // Só realiza vendas pelo app mobile
+}
+
+// ==========================================
+// ENUM: status de uma venda
+// ==========================================
+enum SaleStatus {
+  open        // Criada pelo vendedor, aguardando confirmação
+  completed   // Finalizada pelo admin
+  cancelled   // Cancelada (estoque devolvido)
+}
+
+// ==========================================
+// TABELA: users
+// Armazena admins e vendedores
+// ==========================================
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(seller)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relacionamentos
+  sales        Sale[]
+
+  @@map("users")
+}
+
+// ==========================================
+// TABELA: events
+// Cada evento de moto onde a loja vai vender
+// ==========================================
+model Event {
+  id        String   @id @default(uuid())
+  name      String                        // "Moto Fest SP 2025"
+  location  String?                       // "Anhembi, São Paulo"
+  eventDate DateTime? @map("event_date")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relacionamentos
+  stocks    EventStock[]
+  sales     Sale[]
+
+  @@map("events")
+}
+
+// ==========================================
+// TABELA: products
+// Catálogo de produtos da loja
+// ==========================================
+model Product {
+  id        String   @id @default(uuid())
+  name      String                        // "Capacete X-11"
+  category  String                        // capacete, jaqueta, bota, bone, camisa
+  price     Decimal  @db.Decimal(10, 2)
+  imageUrl  String?  @map("image_url")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relacionamentos
+  stocks     EventStock[]
+  saleItems  SaleItem[]
+
+  @@map("products")
+}
+
+// ==========================================
+// TABELA: event_stock
+// Estoque de cada produto POR evento
+// O admin define quanto leva para cada evento
+// ==========================================
+model EventStock {
+  id               String   @id @default(uuid())
+  eventId          String   @map("event_id")
+  productId        String   @map("product_id")
+  initialQuantity  Int      @map("initial_quantity")  // quanto levou
+  currentQuantity  Int      @map("current_quantity")  // quanto ainda tem
+
+  // Relacionamentos
+  event   Event   @relation(fields: [eventId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  // Um produto por evento (sem duplicata)
+  @@unique([eventId, productId])
+  @@map("event_stock")
+}
+
+// ==========================================
+// TABELA: sales
+// Cabeçalho da venda (quem, quando, qual evento)
+// ==========================================
+model Sale {
+  id            String     @id @default(uuid())
+  eventId       String     @map("event_id")
+  sellerId      String     @map("seller_id")
+  status        SaleStatus @default(open)
+  total         Decimal?   @db.Decimal(10, 2)
+  paymentMethod String?    @map("payment_method")  // dinheiro, pix, cartao
+  notes         String?
+  createdAt     DateTime   @default(now()) @map("created_at")
+  completedAt   DateTime?  @map("completed_at")
+
+  // Relacionamentos
+  event  Event      @relation(fields: [eventId], references: [id])
+  seller User       @relation(fields: [sellerId], references: [id])
+  items  SaleItem[]
+
+  @@map("sales")
+}
+
+// ==========================================
+// TABELA: sale_items
+// Itens de cada venda (produto + quantidade + preço na hora)
+// Preço salvo aqui pois pode mudar depois
+// ==========================================
+model SaleItem {
+  id        String  @id @default(uuid())
+  saleId    String  @map("sale_id")
+  productId String  @map("product_id")
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(10, 2)  // preço no momento
+  subtotal  Decimal @db.Decimal(10, 2)
+
+  // Relacionamentos
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("sale_items")
+}
