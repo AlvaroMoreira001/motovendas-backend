@@ -9,8 +9,13 @@ const path = require('path')
 const app = express()
 
 // ── CORS ──────────────────────────────────────────────────
-app.use(cors())
-app.use(express.json())
+app.use(cors({
+  origin: [
+    'https://motovendas.vercel.app/',  // URL do seu portal web no Vercel
+    'http://localhost:5173',               // desenvolvimento local
+  ],
+  credentials: true,
+}))
 
 // ── Servir imagens de produtos como arquivos estáticos ────
 // Qualquer URL /uploads/products/produto_xxx.jpg é servida diretamente
