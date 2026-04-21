@@ -1,241 +1,121 @@
 /**
  * src/controllers/users.controller.js
- *
- * CRUD completo de usuários. Apenas admins podem acessar.
- *
- * GET    /users          → lista todos os usuários
- * POST   /users          → cria novo usuário (seller ou admin)
- * GET    /users/:id      → detalhes de um usuário
- * PUT    /users/:id      → atualiza dados
- * PATCH  /users/:id/toggle-active → ativa ou desativa o usuário
+ * Com logs de auditoria em: criar, atualizar, ativar/desativar
  */
-
-const bcrypt = require('bcryptjs');
-const prisma = require('../config/prisma');
+const bcrypt = require('bcryptjs')
+const prisma = require('../config/prisma')
+const { audit } = require('../utils/audit')
 
 const usersController = {
-
-  /**
-   * Lista todos os usuários
-   * Suporte a filtro por role: GET /users?role=seller
-   */
   async list(req, res) {
     try {
-      const { role } = req.query;
-
+      const { role } = req.query
       const users = await prisma.user.findMany({
         where: role ? { role } : undefined,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          active: true,
-          createdAt: true,
-          // Conta quantas vendas esse usuário tem
-          _count: { select: { sales: true } },
-        },
+        select: { id:true, name:true, email:true, role:true, active:true, createdAt:true, _count:{ select:{ sales:true } } },
         orderBy: { name: 'asc' },
-      });
-
-      return res.json(users);
-
-    } catch (error) {
-      console.error('[USERS] Erro ao listar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      })
+      return res.json(users)
+    } catch (e) { console.error('[USERS] list:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Cria novo usuário
-   * Body: { name, email, password, role }
-   */
   async create(req, res) {
     try {
-      const { name, email, password, role } = req.body;
+      const { name, email, password, role } = req.body
+      if (!name || !email || !password) return res.status(400).json({ error:'Nome, email e senha são obrigatórios.' })
+      if (password.length < 6) return res.status(400).json({ error:'Senha deve ter mínimo 6 caracteres.' })
+      if (role && !['admin','seller'].includes(role)) return res.status(400).json({ error:'Role inválido.' })
+      const existing = await prisma.user.findUnique({ where:{ email: email.toLowerCase().trim() } })
+      if (existing) return res.status(409).json({ error:'Email já cadastrado.' })
 
-      // Validações
-      if (!name || !email || !password) {
-        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
-      }
-
-      if (password.length < 6) {
-        return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
-      }
-
-      if (role && !['admin', 'seller'].includes(role)) {
-        return res.status(400).json({ error: 'Role inválido. Use "admin" ou "seller".' });
-      }
-
-      // Verifica se o email já está em uso
-      const existing = await prisma.user.findUnique({
-        where: { email: email.toLowerCase().trim() },
-      });
-
-      if (existing) {
-        return res.status(409).json({ error: 'Este email já está cadastrado.' });
-      }
-
-      // Gera o hash da senha (custo 10 = bom equilíbrio segurança/performance)
-      const passwordHash = await bcrypt.hash(password, 10);
-
+      const passwordHash = await bcrypt.hash(password, 10)
       const user = await prisma.user.create({
-        data: {
-          name: name.trim(),
-          email: email.toLowerCase().trim(),
-          passwordHash,
-          role: role || 'seller',
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          active: true,
-          createdAt: true,
-        },
-      });
+        data: { name:name.trim(), email:email.toLowerCase().trim(), passwordHash, role:role||'seller' },
+        select: { id:true, name:true, email:true, role:true, active:true, createdAt:true },
+      })
 
-      return res.status(201).json(user);
+      await audit(prisma, {
+        action: 'user_created',
+        description: `Usuário "${user.name}" (${user.email}) criado com perfil ${user.role}`,
+        userId: req.user?.id,
+        targetId: user.id,
+        targetType: 'user',
+        metadata: { name:user.name, email:user.email, role:user.role },
+      })
 
-    } catch (error) {
-      console.error('[USERS] Erro ao criar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.status(201).json(user)
+    } catch (e) { console.error('[USERS] create:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Detalhes de um usuário específico
-   */
   async getById(req, res) {
     try {
-      const { id } = req.params;
-
+      const { id } = req.params
       const user = await prisma.user.findUnique({
         where: { id },
         select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          active: true,
-          createdAt: true,
-          // Últimas 10 vendas do usuário
-          sales: {
-            select: {
-              id: true,
-              status: true,
-              total: true,
-              paymentMethod: true,
-              createdAt: true,
-              event: { select: { name: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 10,
-          },
-          _count: { select: { sales: true } },
+          id:true, name:true, email:true, role:true, active:true, createdAt:true,
+          sales: { select:{ id:true, status:true, total:true, paymentMethod:true, createdAt:true, event:{ select:{ name:true } } }, orderBy:{ createdAt:'desc' }, take:10 },
+          _count: { select:{ sales:true } },
         },
-      });
-
-      if (!user) {
-        return res.status(404).json({ error: 'Usuário não encontrado.' });
-      }
-
-      return res.json(user);
-
-    } catch (error) {
-      console.error('[USERS] Erro ao buscar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      })
+      if (!user) return res.status(404).json({ error:'Usuário não encontrado.' })
+      return res.json(user)
+    } catch (e) { console.error('[USERS] getById:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Atualiza dados do usuário (nome, email, senha)
-   * Não é possível trocar o role aqui por segurança — use um endpoint dedicado
-   */
   async update(req, res) {
     try {
-      const { id } = req.params;
-      const { name, email, password } = req.body;
+      const { id } = req.params
+      const { name, email, password } = req.body
+      const existing = await prisma.user.findUnique({ where:{ id } })
+      if (!existing) return res.status(404).json({ error:'Usuário não encontrado.' })
 
-      // Verifica se existe
-      const existing = await prisma.user.findUnique({ where: { id } });
-      if (!existing) {
-        return res.status(404).json({ error: 'Usuário não encontrado.' });
-      }
+      const updateData = {}
+      const changes = []
 
-      // Prepara os dados para atualizar (só o que foi enviado)
-      const updateData = {};
-
-      if (name) updateData.name = name.trim();
+      if (name && name !== existing.name) { updateData.name = name.trim(); changes.push(`nome: "${existing.name}" → "${name.trim()}"`) }
       if (email) {
-        const emailInUse = await prisma.user.findFirst({
-          where: { email: email.toLowerCase().trim(), NOT: { id } },
-        });
-        if (emailInUse) {
-          return res.status(409).json({ error: 'Este email já está em uso.' });
-        }
-        updateData.email = email.toLowerCase().trim();
+        const emailInUse = await prisma.user.findFirst({ where:{ email:email.toLowerCase().trim(), NOT:{ id } } })
+        if (emailInUse) return res.status(409).json({ error:'Email já em uso.' })
+        if (email.toLowerCase().trim() !== existing.email) { updateData.email = email.toLowerCase().trim(); changes.push(`email alterado`) }
       }
       if (password) {
-        if (password.length < 6) {
-          return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
-        }
-        updateData.passwordHash = await bcrypt.hash(password, 10);
+        if (password.length < 6) return res.status(400).json({ error:'Senha deve ter mínimo 6 caracteres.' })
+        updateData.passwordHash = await bcrypt.hash(password, 10)
+        changes.push('senha alterada')
       }
 
-      const user = await prisma.user.update({
-        where: { id },
-        data: updateData,
-        select: {
-          id: true, name: true, email: true, role: true, active: true,
-        },
-      });
+      const user = await prisma.user.update({ where:{ id }, data:updateData, select:{ id:true, name:true, email:true, role:true, active:true } })
 
-      return res.json(user);
-
-    } catch (error) {
-      console.error('[USERS] Erro ao atualizar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      if (changes.length > 0) {
+        await audit(prisma, {
+          action: 'user_updated',
+          description: `Dados de "${existing.name}" atualizados: ${changes.join(', ')}`,
+          userId: req.user?.id, targetId: user.id, targetType: 'user', metadata: { changes },
+        })
+      }
+      return res.json(user)
+    } catch (e) { console.error('[USERS] update:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Ativa ou desativa um usuário
-   * Usuário desativado não consegue fazer login
-   *
-   * PATCH /users/:id/toggle-active
-   */
   async toggleActive(req, res) {
     try {
-      const { id } = req.params;
+      const { id } = req.params
+      if (id === req.user.id) return res.status(400).json({ error:'Não pode desativar sua própria conta.' })
+      const existing = await prisma.user.findUnique({ where:{ id } })
+      if (!existing) return res.status(404).json({ error:'Usuário não encontrado.' })
 
-      // Não permite desativar a si mesmo
-      if (id === req.user.id) {
-        return res.status(400).json({ error: 'Você não pode desativar sua própria conta.' });
-      }
+      const user = await prisma.user.update({ where:{ id }, data:{ active:!existing.active }, select:{ id:true, name:true, active:true } })
 
-      const existing = await prisma.user.findUnique({ where: { id } });
-      if (!existing) {
-        return res.status(404).json({ error: 'Usuário não encontrado.' });
-      }
+      await audit(prisma, {
+        action: 'user_toggled',
+        description: `Usuário "${existing.name}" foi ${user.active ? 'ativado' : 'desativado'} por ${req.user.name}`,
+        userId: req.user?.id, targetId: user.id, targetType: 'user', metadata: { active:user.active },
+      })
 
-      const user = await prisma.user.update({
-        where: { id },
-        data: { active: !existing.active },
-        select: { id: true, name: true, active: true },
-      });
-
-      return res.json({
-        ...user,
-        message: user.active ? 'Usuário ativado.' : 'Usuário desativado.',
-      });
-
-    } catch (error) {
-      console.error('[USERS] Erro ao toggle:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.json({ ...user, message: user.active ? 'Usuário ativado.' : 'Usuário desativado.' })
+    } catch (e) { console.error('[USERS] toggle:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
-};
+}
 
-module.exports = usersController;
+module.exports = usersController

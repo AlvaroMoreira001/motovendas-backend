@@ -1,72 +1,60 @@
 /**
  * src/app.js
- *
- * Configura e exporta o app Express.
- * Separado do server.js para facilitar testes automatizados.
  */
+require('dotenv').config()
+const express = require('express')
+const cors = require('cors')
+const path = require('path')
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+const app = express()
 
-const app = express();
+// ── CORS ──────────────────────────────────────────────────
+app.use(cors())
+app.use(express.json())
 
-// =============================================
-// MIDDLEWARES GLOBAIS
-// =============================================
+// ── Servir imagens de produtos como arquivos estáticos ────
+// Qualquer URL /uploads/products/produto_xxx.jpg é servida diretamente
+// Sem autenticação — as URLs são públicas por design (necessário para o app mobile e portal web exibirem as imagens)
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 
-// Permite requisições de qualquer origem (necessário para o app mobile e portal web)
-// Em produção, restrinja para os domínios reais:
-// app.use(cors({ origin: ['https://meuportal.com', 'capacitor://localhost'] }))
-app.use(cors());
+// ── Rotas ─────────────────────────────────────────────────
+const authRoutes      = require('./routes/auth.routes')
+const usersRoutes     = require('./routes/users.routes')
+const productsRoutes  = require('./routes/products.routes')
+const eventsRoutes    = require('./routes/events.routes')
+const salesRoutes     = require('./routes/sales.routes')
+const dashboardRoutes = require('./routes/dashboard.routes')
+const auditRoutes     = require('./routes/audit.routes')
 
-// Interpreta o body das requisições como JSON
-app.use(express.json());
+app.use('/auth',      authRoutes)
+app.use('/users',     usersRoutes)
+app.use('/products',  productsRoutes)
+app.use('/events',    eventsRoutes)
+app.use('/sales',     salesRoutes)
+app.use('/dashboard', dashboardRoutes)
+app.use('/audit',     auditRoutes)
 
-// =============================================
-// ROTAS
-// =============================================
-
-const authRoutes      = require('./routes/auth.routes');
-const usersRoutes     = require('./routes/users.routes');
-const productsRoutes  = require('./routes/products.routes');
-const eventsRoutes    = require('./routes/events.routes');
-const salesRoutes     = require('./routes/sales.routes');
-const dashboardRoutes = require('./routes/dashboard.routes');
-
-app.use('/auth',      authRoutes);
-app.use('/users',     usersRoutes);
-app.use('/products',  productsRoutes);
-app.use('/events',    eventsRoutes);
-app.use('/sales',     salesRoutes);
-app.use('/dashboard', dashboardRoutes);
-
-// =============================================
-// ROTA DE HEALTH CHECK
-// Usada pelo Railway/Render para saber se o servidor está ok
-// =============================================
+// ── Health check ──────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-  });
-});
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.2.0' })
+})
 
-// =============================================
-// HANDLER DE ROTAS NÃO ENCONTRADAS
-// =============================================
+// ── 404 ───────────────────────────────────────────────────
 app.use((req, res) => {
-  res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.path}` });
-});
+  res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.path}` })
+})
 
-// =============================================
-// HANDLER GLOBAL DE ERROS
-// Captura qualquer erro não tratado nos controllers
-// =============================================
+// ── Handler global de erros ───────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('[ERRO GLOBAL]', err);
-  res.status(500).json({ error: 'Erro interno inesperado.' });
-});
+  // Erro do Multer (arquivo muito grande, tipo errado)
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: 'Imagem muito grande. Limite: 5MB.' })
+  }
+  if (err.message && err.message.includes('Tipo de arquivo')) {
+    return res.status(400).json({ error: err.message })
+  }
+  console.error('[ERRO GLOBAL]', err)
+  res.status(500).json({ error: 'Erro interno inesperado.' })
+})
 
-module.exports = app;
+module.exports = app

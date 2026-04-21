@@ -1,348 +1,255 @@
 /**
  * src/controllers/events.controller.js
- *
- * Gerencia eventos e o estoque de produtos por evento.
- *
- * EVENTOS:
- *   GET    /events               → lista eventos
- *   POST   /events               → cria evento (admin)
- *   GET    /events/:id           → detalhes com estoque
- *   PUT    /events/:id           → atualiza (admin)
- *   PATCH  /events/:id/activate  → define como evento ativo (admin)
- *
- * ESTOQUE DO EVENTO:
- *   POST   /events/:id/stock          → adiciona/atualiza produto no estoque
- *   GET    /events/:id/stock          → lista estoque do evento
- *   PATCH  /events/:id/stock/adjust   → ajuste manual de quantidade (admin)
+ * Com auditoria em: criar evento, ativar evento, ajuste de estoque
+ * E o novo endpoint GET /events/:id/report para exportação XLSX
  */
-
-const prisma = require('../config/prisma');
+const prisma = require('../config/prisma')
+const { audit } = require('../utils/audit')
 
 const eventsController = {
 
-  // =============================================
-  // EVENTOS
-  // =============================================
+  // ── EVENTOS ─────────────────────────────────────────────
 
-  /**
-   * Lista todos os eventos
-   * Suporta filtro: GET /events?active=true
-   */
   async list(req, res) {
     try {
-      const { active } = req.query;
-
-      const where = {};
-      if (active !== undefined) {
-        where.active = active === 'true';
-      }
-
+      const { active } = req.query
+      const where = {}
+      if (active !== undefined) where.active = active === 'true'
       const events = await prisma.event.findMany({
         where,
-        include: {
-          // Quantos produtos no estoque e quantas vendas
-          _count: {
-            select: { stocks: true, sales: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      return res.json(events);
-
-    } catch (error) {
-      console.error('[EVENTS] Erro ao listar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+        include: { _count:{ select:{ stocks:true, sales:true } } },
+        orderBy: { createdAt:'desc' },
+      })
+      return res.json(events)
+    } catch (e) { console.error('[EVENTS] list:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Cria um novo evento
-   * Body: { name, location, eventDate }
-   */
   async create(req, res) {
     try {
-      const { name, location, eventDate } = req.body;
-
-      if (!name) {
-        return res.status(400).json({ error: 'O nome do evento é obrigatório.' });
-      }
+      const { name, location, eventDate } = req.body
+      if (!name) return res.status(400).json({ error:'O nome do evento é obrigatório.' })
 
       const event = await prisma.event.create({
-        data: {
-          name: name.trim(),
-          location: location?.trim() || null,
-          eventDate: eventDate ? new Date(eventDate) : null,
-          active: false, // Começa inativo até o admin ativar
-        },
-      });
+        data: { name:name.trim(), location:location?.trim()||null, eventDate:eventDate?new Date(eventDate):null, active:false },
+      })
 
-      return res.status(201).json(event);
+      await audit(prisma, {
+        action: 'event_created',
+        description: `Evento "${event.name}" criado por ${req.user.name}`,
+        userId: req.user?.id, targetId: event.id, targetType: 'event',
+        metadata: { name:event.name, location:event.location, eventDate:event.eventDate },
+      })
 
-    } catch (error) {
-      console.error('[EVENTS] Erro ao criar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.status(201).json(event)
+    } catch (e) { console.error('[EVENTS] create:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Detalhes de um evento com seu estoque completo
-   */
   async getById(req, res) {
     try {
-      const { id } = req.params;
-
+      const { id } = req.params
       const event = await prisma.event.findUnique({
         where: { id },
         include: {
-          stocks: {
-            include: {
-              product: {
-                select: { id: true, name: true, category: true, price: true, imageUrl: true },
-              },
-            },
-            orderBy: { product: { category: 'asc' } },
-          },
-          _count: { select: { sales: true } },
+          stocks: { include:{ product:{ select:{ id:true, name:true, category:true, price:true, imageUrl:true } } }, orderBy:{ product:{ category:'asc' } } },
+          _count: { select:{ sales:true } },
         },
-      });
-
-      if (!event) {
-        return res.status(404).json({ error: 'Evento não encontrado.' });
-      }
-
-      return res.json(event);
-
-    } catch (error) {
-      console.error('[EVENTS] Erro ao buscar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      })
+      if (!event) return res.status(404).json({ error:'Evento não encontrado.' })
+      return res.json(event)
+    } catch (e) { console.error('[EVENTS] getById:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Atualiza dados do evento
-   */
   async update(req, res) {
     try {
-      const { id } = req.params;
-      const { name, location, eventDate } = req.body;
-
-      const existing = await prisma.event.findUnique({ where: { id } });
-      if (!existing) {
-        return res.status(404).json({ error: 'Evento não encontrado.' });
-      }
-
-      const updateData = {};
-      if (name) updateData.name = name.trim();
-      if (location !== undefined) updateData.location = location?.trim() || null;
-      if (eventDate !== undefined) updateData.eventDate = eventDate ? new Date(eventDate) : null;
-
-      const event = await prisma.event.update({ where: { id }, data: updateData });
-
-      return res.json(event);
-
-    } catch (error) {
-      console.error('[EVENTS] Erro ao atualizar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      const { id } = req.params
+      const { name, location, eventDate } = req.body
+      const existing = await prisma.event.findUnique({ where:{ id } })
+      if (!existing) return res.status(404).json({ error:'Evento não encontrado.' })
+      const updateData = {}
+      if (name) updateData.name = name.trim()
+      if (location !== undefined) updateData.location = location?.trim()||null
+      if (eventDate !== undefined) updateData.eventDate = eventDate?new Date(eventDate):null
+      const event = await prisma.event.update({ where:{ id }, data:updateData })
+      return res.json(event)
+    } catch (e) { console.error('[EVENTS] update:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Ativa um evento (e desativa todos os outros)
-   * Só um evento pode estar ativo por vez — é o evento atual do stand
-   *
-   * PATCH /events/:id/activate
-   */
   async activate(req, res) {
     try {
-      const { id } = req.params;
+      const { id } = req.params
+      const event = await prisma.event.findUnique({ where:{ id } })
+      if (!event) return res.status(404).json({ error:'Evento não encontrado.' })
 
-      const event = await prisma.event.findUnique({ where: { id } });
-      if (!event) {
-        return res.status(404).json({ error: 'Evento não encontrado.' });
-      }
-
-      // Transação: desativa todos e ativa o escolhido
       await prisma.$transaction([
-        prisma.event.updateMany({ data: { active: false } }),
-        prisma.event.update({ where: { id }, data: { active: true } }),
-      ]);
+        prisma.event.updateMany({ data:{ active:false } }),
+        prisma.event.update({ where:{ id }, data:{ active:true } }),
+      ])
 
-      return res.json({ message: `Evento "${event.name}" ativado com sucesso.` });
+      await audit(prisma, {
+        action: 'event_activated',
+        description: `Evento "${event.name}" ativado por ${req.user.name}. Todos os outros eventos foram desativados.`,
+        userId: req.user?.id, targetId: id, targetType: 'event',
+        metadata: { eventName:event.name },
+      })
 
-    } catch (error) {
-      console.error('[EVENTS] Erro ao ativar:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.json({ message:`Evento "${event.name}" ativado com sucesso.` })
+    } catch (e) { console.error('[EVENTS] activate:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  // =============================================
-  // ESTOQUE POR EVENTO
-  // =============================================
+  // ── ESTOQUE ──────────────────────────────────────────────
 
-  /**
-   * Lista o estoque do evento com situação de cada produto
-   *
-   * GET /events/:id/stock
-   */
   async getStock(req, res) {
     try {
-      const { id } = req.params;
-
-      const event = await prisma.event.findUnique({ where: { id } });
-      if (!event) {
-        return res.status(404).json({ error: 'Evento não encontrado.' });
-      }
+      const { id } = req.params
+      const event = await prisma.event.findUnique({ where:{ id } })
+      if (!event) return res.status(404).json({ error:'Evento não encontrado.' })
 
       const stocks = await prisma.eventStock.findMany({
-        where: { eventId: id },
-        include: {
-          product: {
-            select: { id: true, name: true, category: true, price: true, imageUrl: true },
-          },
-        },
-        orderBy: { product: { category: 'asc' } },
-      });
+        where: { eventId:id },
+        include: { product:{ select:{ id:true, name:true, category:true, price:true, imageUrl:true } } },
+        orderBy: { product:{ category:'asc' } },
+      })
 
-      // Calcula quantos foram vendidos e percentual restante
-      const stockWithStats = stocks.map((s) => ({
+      const stockWithStats = stocks.map(s => ({
         ...s,
         sold: s.initialQuantity - s.currentQuantity,
         percentageRemaining: Math.round((s.currentQuantity / s.initialQuantity) * 100),
-        alert: s.currentQuantity <= 2, // alerta de estoque baixo
-      }));
+        alert: s.currentQuantity <= 2,
+      }))
 
-      return res.json({
-        event: { id: event.id, name: event.name, active: event.active },
-        stocks: stockWithStats,
-      });
-
-    } catch (error) {
-      console.error('[EVENTS] Erro ao buscar estoque:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.json({ event:{ id:event.id, name:event.name, active:event.active }, stocks:stockWithStats })
+    } catch (e) { console.error('[EVENTS] getStock:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Adiciona ou atualiza produto no estoque do evento
-   * Se o produto já existe no estoque, SUBSTITUI a quantidade inicial
-   *
-   * POST /events/:id/stock
-   * Body: { productId, quantity }
-   *   ou: { items: [{ productId, quantity }, ...] }  → adiciona vários de uma vez
-   */
   async setStock(req, res) {
     try {
-      const { id: eventId } = req.params;
-      const { productId, quantity, items } = req.body;
+      const { id: eventId } = req.params
+      const { productId, quantity, items } = req.body
+      const event = await prisma.event.findUnique({ where:{ id:eventId } })
+      if (!event) return res.status(404).json({ error:'Evento não encontrado.' })
 
-      const event = await prisma.event.findUnique({ where: { id: eventId } });
-      if (!event) {
-        return res.status(404).json({ error: 'Evento não encontrado.' });
-      }
+      const stockItems = items || [{ productId, quantity }]
+      if (!stockItems.length || stockItems.some(i => !i.productId || i.quantity === undefined))
+        return res.status(400).json({ error:'Informe productId e quantity para cada item.' })
 
-      // Normaliza: aceita item único ou lista de itens
-      const stockItems = items || [{ productId, quantity }];
-
-      if (!stockItems.length || stockItems.some((i) => !i.productId || i.quantity === undefined)) {
-        return res.status(400).json({ error: 'Informe productId e quantity para cada item.' });
-      }
-
-      const results = [];
-
+      const results = []
       for (const item of stockItems) {
-        if (isNaN(item.quantity) || Number(item.quantity) < 0) {
-          return res.status(400).json({ error: 'Quantidade deve ser um número >= 0.' });
-        }
+        if (isNaN(item.quantity) || Number(item.quantity) < 0)
+          return res.status(400).json({ error:'Quantidade deve ser >= 0.' })
 
-        // Verifica se o produto existe
-        const product = await prisma.product.findUnique({ where: { id: item.productId } });
-        if (!product) {
-          return res.status(404).json({ error: `Produto ${item.productId} não encontrado.` });
-        }
+        const product = await prisma.product.findUnique({ where:{ id:item.productId } })
+        if (!product) return res.status(404).json({ error:`Produto ${item.productId} não encontrado.` })
 
-        // Upsert: cria ou substitui o estoque do produto nesse evento
         const stock = await prisma.eventStock.upsert({
-          where: {
-            eventId_productId: { eventId, productId: item.productId },
-          },
-          update: {
-            initialQuantity: Number(item.quantity),
-            currentQuantity: Number(item.quantity),
-          },
-          create: {
-            eventId,
-            productId: item.productId,
-            initialQuantity: Number(item.quantity),
-            currentQuantity: Number(item.quantity),
-          },
-          include: {
-            product: { select: { name: true, category: true } },
-          },
-        });
-
-        results.push(stock);
+          where: { eventId_productId:{ eventId, productId:item.productId } },
+          update: { initialQuantity:Number(item.quantity), currentQuantity:Number(item.quantity) },
+          create: { eventId, productId:item.productId, initialQuantity:Number(item.quantity), currentQuantity:Number(item.quantity) },
+          include: { product:{ select:{ name:true, category:true } } },
+        })
+        results.push(stock)
       }
-
-      return res.status(201).json(results);
-
-    } catch (error) {
-      console.error('[EVENTS] Erro ao definir estoque:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+      return res.status(201).json(results)
+    } catch (e) { console.error('[EVENTS] setStock:', e); return res.status(500).json({ error:'Erro interno.' }) }
   },
 
-  /**
-   * Ajuste manual de estoque (para correções)
-   * Ex: contagem física revelou divergência
-   *
-   * PATCH /events/:id/stock/adjust
-   * Body: { productId, newQuantity, reason }
-   */
   async adjustStock(req, res) {
     try {
-      const { id: eventId } = req.params;
-      const { productId, newQuantity, reason } = req.body;
+      const { id: eventId } = req.params
+      const { productId, newQuantity, reason } = req.body
 
-      if (!productId || newQuantity === undefined) {
-        return res.status(400).json({ error: 'productId e newQuantity são obrigatórios.' });
-      }
-
-      if (isNaN(newQuantity) || Number(newQuantity) < 0) {
-        return res.status(400).json({ error: 'Quantidade deve ser >= 0.' });
-      }
+      if (!productId || newQuantity === undefined)
+        return res.status(400).json({ error:'productId e newQuantity são obrigatórios.' })
+      if (isNaN(newQuantity) || Number(newQuantity) < 0)
+        return res.status(400).json({ error:'Quantidade deve ser >= 0.' })
 
       const stock = await prisma.eventStock.findUnique({
-        where: { eventId_productId: { eventId, productId } },
-      });
-
-      if (!stock) {
-        return res.status(404).json({ error: 'Produto não encontrado no estoque desse evento.' });
-      }
+        where: { eventId_productId:{ eventId, productId } },
+        include: { product:{ select:{ name:true } } },
+      })
+      if (!stock) return res.status(404).json({ error:'Produto não encontrado no estoque desse evento.' })
 
       const updated = await prisma.eventStock.update({
-        where: { eventId_productId: { eventId, productId } },
-        data: { currentQuantity: Number(newQuantity) },
-        include: {
-          product: { select: { name: true, category: true } },
-        },
-      });
+        where: { eventId_productId:{ eventId, productId } },
+        data: { currentQuantity:Number(newQuantity) },
+        include: { product:{ select:{ name:true, category:true } } },
+      })
+
+      // ── Auditoria ──────────────────────────────────────
+      await audit(prisma, {
+        action: 'stock_adjust',
+        description: `Estoque de "${stock.product.name}" ajustado de ${stock.currentQuantity} para ${newQuantity} unidades por ${req.user.name}`,
+        userId: req.user?.id,
+        targetId: stock.id,
+        targetType: 'stock',
+        reason: reason || null,
+        metadata: { productName:stock.product.name, from:stock.currentQuantity, to:Number(newQuantity), eventId },
+      })
 
       return res.json({
         ...updated,
-        adjustment: {
-          from: stock.currentQuantity,
-          to: Number(newQuantity),
-          reason: reason || 'Ajuste manual',
-          adjustedBy: req.user.name,
-        },
-      });
+        adjustment: { from:stock.currentQuantity, to:Number(newQuantity), reason:reason||'Ajuste manual', adjustedBy:req.user.name },
+      })
+    } catch (e) { console.error('[EVENTS] adjustStock:', e); return res.status(500).json({ error:'Erro interno.' }) }
+  },
 
-    } catch (error) {
-      console.error('[EVENTS] Erro ao ajustar estoque:', error);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
+  // ── RELATÓRIO DO EVENTO ───────────────────────────────────
+  // GET /events/:id/report
+  // Retorna todos os dados do evento para exportação XLSX no portal
+
+  async getReport(req, res) {
+    try {
+      const { id } = req.params
+
+      const event = await prisma.event.findUnique({ where:{ id } })
+      if (!event) return res.status(404).json({ error:'Evento não encontrado.' })
+
+      // 1. Todas as vendas (exceto canceladas) com itens
+      const sales = await prisma.sale.findMany({
+        where: { eventId:id },
+        include: {
+          seller:{ select:{ id:true, name:true } },
+          items:{ include:{ product:{ select:{ name:true, category:true } } } },
+        },
+        orderBy: { createdAt:'asc' },
+      })
+
+      // 2. Estoque completo do evento
+      const stocks = await prisma.eventStock.findMany({
+        where: { eventId:id },
+        include: { product:{ select:{ name:true, category:true, price:true } } },
+        orderBy: { product:{ category:'asc' } },
+      })
+
+      // 3. Resumo por vendedor
+      const sellerMap = {}
+      for (const sale of sales) {
+        if (sale.status === 'cancelled') continue
+        const sid = sale.seller.id
+        if (!sellerMap[sid]) sellerMap[sid] = { sellerId:sid, sellerName:sale.seller.name, totalSales:0, totalRevenue:0 }
+        sellerMap[sid].totalSales += 1
+        sellerMap[sid].totalRevenue += Number(sale.total || 0)
+      }
+      const bySeller = Object.values(sellerMap).sort((a,b) => b.totalRevenue - a.totalRevenue)
+
+      // 4. Totais gerais
+      const validSales = sales.filter(s => s.status !== 'cancelled')
+      const totalRevenue = validSales.reduce((sum, s) => sum + Number(s.total || 0), 0)
+      const averageTicket = validSales.length > 0 ? totalRevenue / validSales.length : 0
+
+      return res.json({
+        event,
+        totalSales: validSales.length,
+        totalRevenue,
+        averageTicket,
+        sales,
+        stocks,
+        bySeller,
+      })
+    } catch (e) {
+      console.error('[EVENTS] getReport:', e)
+      return res.status(500).json({ error:'Erro interno do servidor.' })
     }
   },
-};
+}
 
-module.exports = eventsController;
+module.exports = eventsController

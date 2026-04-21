@@ -3,6 +3,7 @@
 
 generator client {
   provider = "prisma-client-js"
+  engineType = "binary"
 }
 
 datasource db {
@@ -41,6 +42,7 @@ model User {
 
   // Relacionamentos
   sales        Sale[]
+  auditLogs    AuditLog[]
 
   @@map("users")
 }
@@ -146,4 +148,26 @@ model SaleItem {
   product Product @relation(fields: [productId], references: [id])
 
   @@map("sale_items")
+}
+
+// ==========================================
+// TABELA: audit_logs
+// Histórico imutável de todas as modificações
+// do sistema. Nada é deletado aqui.
+// ==========================================
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String                        // stock_adjust, user_created, sale_completed...
+  description String                        // texto legível do que aconteceu
+  reason      String?                       // justificativa (ajuste manual de estoque)
+  userId      String?  @map("user_id")      // quem fez a ação (null = sistema)
+  targetId    String?  @map("target_id")    // ID do recurso afetado
+  targetType  String?  @map("target_type")  // "user" | "sale" | "stock" | "event" | "product"
+  metadata    Json?                         // dados extras em JSON (ex: de X para Y)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relacionamentos
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
 }

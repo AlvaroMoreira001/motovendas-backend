@@ -14,8 +14,10 @@
  */
 
 require('dotenv').config();
-const prisma = require('../src/config/prisma');
+const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+
+const prisma = new PrismaClient();
 
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados...\n');
@@ -178,3 +180,46 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
+  // =============================================
+  // LOGS DE AUDITORIA (exemplos para testar)
+  // =============================================
+  console.log('\n📋 Criando logs de auditoria de exemplo...')
+
+  const adminUser = await prisma.user.findUnique({ where: { email: 'admin@motovendas.com' } })
+
+  const exemploLogs = [
+    {
+      action: 'user_created',
+      description: 'Usuário "João Silva" (joao@motovendas.com) criado com perfil seller',
+      userId: adminUser.id,
+      targetType: 'user',
+      metadata: { name: 'João Silva', role: 'seller' },
+    },
+    {
+      action: 'user_created',
+      description: 'Usuário "Maria Souza" (maria@motovendas.com) criado com perfil seller',
+      userId: adminUser.id,
+      targetType: 'user',
+      metadata: { name: 'Maria Souza', role: 'seller' },
+    },
+    {
+      action: 'event_created',
+      description: 'Evento "Moto Fest SP 2025" criado por Administrador',
+      userId: adminUser.id,
+      targetType: 'event',
+      metadata: { name: 'Moto Fest SP 2025' },
+    },
+    {
+      action: 'event_activated',
+      description: 'Evento "Moto Fest SP 2025" ativado por Administrador',
+      userId: adminUser.id,
+      targetType: 'event',
+    },
+  ]
+
+  for (const log of exemploLogs) {
+    await prisma.auditLog.create({ data: log })
+    console.log(`  ✅ Log: ${log.action}`)
+  }
+
