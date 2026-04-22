@@ -9,33 +9,22 @@ const path    = require('path')
 const app = express()
 
 // ── CORS ──────────────────────────────────────────────────
-// Configuração explícita — necessária para funcionar corretamente
-// em produção atrás do proxy do Railway.
-//
-// FRONTEND_URL deve ser definida nas variáveis de ambiente do Railway.
-// Ex: https://motovendas-web.vercel.app
-//
-// Se não definida, libera todas as origens (útil em desenvolvimento).
 const allowedOrigins = process.env.FRONTEND_URL
   ? [process.env.FRONTEND_URL, 'http://localhost:5173', 'http://localhost:3000']
-  : true // libera tudo — seguro apenas em dev
+  : true
 
-app.use(cors({
+const corsOptions = {
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   optionsSuccessStatus: 204,
-}))
+}
 
-// Responde preflight OPTIONS em todas as rotas explicitamente
-app.options('*', cors({
-  origin: allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 204,
-}))
+app.use(cors(corsOptions))
+
+// Preflight para todas as rotas — Express 5 exige (.*) em vez de *
+app.options('(.*)', cors(corsOptions))
 
 // ── Body parser ───────────────────────────────────────────
 app.use(express.json())
