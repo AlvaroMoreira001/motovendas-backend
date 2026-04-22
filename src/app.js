@@ -9,9 +9,13 @@ const path    = require('path')
 const app = express()
 
 // ── CORS ──────────────────────────────────────────────────
-const allowedOrigins = process.env.FRONTEND_URL
-  ? [process.env.FRONTEND_URL, 'http://localhost:5173', 'http://localhost:3000']
-  : true
+const frontendUrl = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.replace(/\/$/, '')
+  : null
+
+const allowedOrigins = frontendUrl
+  ? [frontendUrl, 'http://localhost:5173']
+  : ['http://localhost:5173']
 
 const corsOptions = {
   origin: allowedOrigins,
@@ -24,7 +28,7 @@ const corsOptions = {
 app.use(cors(corsOptions))
 
 // Preflight para todas as rotas — Express 5 exige (.*) em vez de *
-app.options('(.*)', cors(corsOptions))
+app.options(/.*/, cors(corsOptions))
 
 // ── Body parser ───────────────────────────────────────────
 app.use(express.json())
