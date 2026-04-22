@@ -3,23 +3,45 @@
  */
 require('dotenv').config()
 const express = require('express')
-const cors = require('cors')
-const path = require('path')
+const cors    = require('cors')
+const path    = require('path')
 
 const app = express()
 
 // ── CORS ──────────────────────────────────────────────────
+// Configuração explícita — necessária para funcionar corretamente
+// em produção atrás do proxy do Railway.
+//
+// FRONTEND_URL deve ser definida nas variáveis de ambiente do Railway.
+// Ex: https://motovendas-web.vercel.app
+//
+// Se não definida, libera todas as origens (útil em desenvolvimento).
+const allowedOrigins = process.env.FRONTEND_URL
+  ? [process.env.FRONTEND_URL, 'http://localhost:5173', 'http://localhost:3000']
+  : true // libera tudo — seguro apenas em dev
+
 app.use(cors({
-  origin: [
-    'https://motovendas.vercel.app/',  // URL do seu portal web no Vercel
-    'http://localhost:5173',               // desenvolvimento local
-  ],
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
+  optionsSuccessStatus: 204,
 }))
 
-// ── Servir imagens de produtos como arquivos estáticos ────
-// Qualquer URL /uploads/products/produto_xxx.jpg é servida diretamente
-// Sem autenticação — as URLs são públicas por design (necessário para o app mobile e portal web exibirem as imagens)
+// Responde preflight OPTIONS em todas as rotas explicitamente
+app.options('*', cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 204,
+}))
+
+// ── Body parser ───────────────────────────────────────────
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+
+// ── Imagens estáticas ─────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 
 // ── Rotas ─────────────────────────────────────────────────
@@ -51,7 +73,6 @@ app.use((req, res) => {
 
 // ── Handler global de erros ───────────────────────────────
 app.use((err, req, res, next) => {
-  // Erro do Multer (arquivo muito grande, tipo errado)
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({ error: 'Imagem muito grande. Limite: 5MB.' })
   }
